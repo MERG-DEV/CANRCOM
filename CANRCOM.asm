@@ -1,5 +1,5 @@
-;   	TITLE		"Code for Railcom to CNUS module  FLiM node for CBUS"
-; filename CANRCOM_test	 	19/05/20
+;   	TITLE		"Code for Railcom to CBUS module  FLiM node for CBUS"
+; filename CANRCOM_test5	 	12/10/20
 ; This code is for a PIC  18F25K80
 
 ; Assembly options
@@ -20,6 +20,10 @@
 ; CAN bit rate of 125 Kbits/sec
 ; Standard frame only except for bootloader
 ; Uses a CANMIO board with a CT on a small board connected to the 10 way IDC header.
+; As test 1 but mod for short loco addresses and equal Ch 1 times.
+; As test 3 but with channel 2 added
+; Now test 5. Has dual frequency bootloader and 'name' OpCode.
+
 
 
 OPC_DDES    EQU	0xFA	; Short data frame aka device data event (device id plus 5 data bytes)
@@ -42,13 +46,12 @@ YELLOW		equ		6	;PB6 is the yellow LED on the PCB
 
 
 OLD_EN_NUM  equ	.32		;old number of allowed events (hangover from earlier module code)
-EN_NUM	equ	4		;each event is a two byte DN, one for each reader
-EV_NUM  equ 1		;number of allowed EVs per event. 1 to 4. Defines which reader
-
+EN_NUM	equ	1		;each event is a two byte DN, one for each reader
+EV_NUM  equ 1		;number of allowed EVs per event. 1 . 
 Modstat equ 1		;Module state address in EEPROM
 
 MAN_NO      equ MANU_MERG    ;manufacturer number
-MAJOR_VER   equ 4
+MAJOR_VER   equ 5
 MINOR_VER   equ "A"
 BETA_VER	equ .101        ; Set BETA version here, set to 0 for release version
 EVT_NUM     equ EN_NUM      ; Number of events
@@ -98,7 +101,9 @@ MODULE_ID	equ MTYP_CANRCOM	;.66			;Till in cbusdefs.
 #define	CAN_RXM0SIDL	B'11101011'
 #define	CAN_RXM0EIDH	B'11111111'
 #define	CAN_RXM0EIDL	B'11111000'
-#define	CAN_BRGCON1		B'00001111'	;CAN bit rate controls. 16 MHz resonator
+;#define	CAN_BRGCON1		B'00001111'	;CAN bit rate controls. 16 MHz resonator
+#define	CANBIT_RATE		B'00001111'	 ;CAN bit rate while runnung. For 16 MHz clock
+#define CANBIT_BL		B'00000011'  ;CAN bit rate for bootloader
 #define	CAN_BRGCON2		B'10011110'
 #define	CAN_BRGCON3		B'00000011'
 #define	CAN_CIOCON		B'00100000'	;CAN I/O control	
@@ -129,7 +134,7 @@ MODULE_ID	equ MTYP_CANRCOM	;.66			;Till in cbusdefs.
 
 
 
-	CONFIG	FCMEN = OFF, FOSC = HS1, IESO = OFF, PLLCFG = ON
+	CONFIG	FCMEN = OFF, FOSC = HS1, IESO = OFF, PLLCFG = OFF
 	CONFIG	PWRTEN = ON, BOREN = SBORDIS, BORV=0, SOSCSEL = DIG
 	CONFIG	WDTEN=OFF
 	CONFIG	MCLRE = ON, CANMX = PORTB
@@ -190,6 +195,10 @@ MODULE_ID	equ MTYP_CANRCOM	;.66			;Till in cbusdefs.
 	T4count		;rolls over every 10 mSec
 	Debcnt		;debounce counter
 	Loco		;flags for orientation
+	Loco1		;last byte if there are 4
+	IDbyte		;for RailCom ID in top nybble
+	ID_old
+	Ch_no		;channel number for RailCom
 
 	DNhi		;device number for reader
 	DNlo
@@ -199,6 +208,7 @@ MODULE_ID	equ MTYP_CANRCOM	;.66			;Till in cbusdefs.
 	Datmode		;for CBUS
 	IDcount		;used in self allocation of CAN ID.
 	Temp		;temp for various
+	W_temp		;temp for W REG
 	EVflags
 	Sflag		;flag for send once
 	Bflag		;fot both hi amd lo address bytes
@@ -426,7 +436,7 @@ _CANInit:
 	movlw	CAN_RXM0EIDL	
 	movwf	RXM0EIDL
 
-	movlw	CAN_BRGCON1	;	Set bit rate for bootloader
+	movlw	CANBIT_BL		;	Set bit rate for bootloader
 	movwf	BRGCON1	
 	movlw	CAN_BRGCON2	
 	movwf	BRGCON2	
@@ -960,7 +970,7 @@ seten_f
 ;		get DN  
 
 		
-		movlw	LOW	DevNo			;get reader number
+		movlw	LOW DevNo			;get reader number
 		movwf	EEADR
 		call	eeread				;get DNhi
 		movwf	DNhi
@@ -990,8 +1000,14 @@ seten_f
 hpint	bcf		PIE1,TMR1IE			;no interrupt
 		bcf		T1GCON,TMR1GE		;not gated
 		bcf		T1CON,TMR1ON		;stop timer
+		
+		btfsc	Nvtemp,1			;which channel?
+		bra		ch1
+		btfsc	Nvtemp,2
+		bra		ch2
+		bra		hi_loop1			;do nothing
 	
-		clrf	PIR1				;clear flags
+ch1		clrf	PIR1				;clear flags
 		movlw	0xE4				;time for channel 1 data
 		movwf	TMR1H
 		movlw	0x34
@@ -1021,10 +1037,10 @@ b1_loop1
 		movlw	1
 		movwf	Flags
 		bcf		PIR1,RC1IF			;clear EUSART flag for next
-b2_loop	btfsc	PIR1,TMR1IF			;time out?
+b1_loop2	btfsc	PIR1,TMR1IF			;time out?
 		bra		end_loop
 		btfss	PIR1,RC1IF
-		bra		b2_loop				;wait for now
+		bra		b1_loop2				;wait for now
 		movf	RCREG1,W
 		movwf	Byte2
 		movlw	2
@@ -1034,7 +1050,10 @@ b2_loop	btfsc	PIR1,TMR1IF			;time out?
 
 	
 	
-end_loop bcf	LATC,5				;flag down. End of Channel 1 time
+end_loop btfss	PIR1,TMR1IF			;time out?
+		bra		end_loop
+
+		bcf		LATC,5				;flag down. End of Channel 1 time
 
 		bcf		RCSTA1,CREN			;stop EUSART
 	
@@ -1067,7 +1086,11 @@ do_data	movlw	1
 		btfss	Dat1,3			;is low byte  ID = 1
 		bra		do_1
 		rrncf	Dat1			;move bottom two bytes to 7,6 of second byte
-		rrncf	Dat1,W
+		rrncf	Dat1
+		movf	Dat1,W
+		andlw	B'00001111'
+		movwf	IDbyte			;has ID byte
+		movf	Dat1,W
 		andlw	B'11000000'		;clear unwanted bits
 		iorwf	Dat2,W
 		movwf	Adr2			;has low address byte
@@ -1081,40 +1104,58 @@ do_2	nop
 		bra		hi_loop			;back for second byte
 do_1	btfss	Dat1,2			;is it hi byte?  ID= 2	(add more here for a consist)
 		bra		do_2			;is an error so abort
+
 		rrncf	Dat1			;move bottom two bytes to 7,6 of second byte
-		rrncf	Dat1,W
+		rrncf	Dat1
+		movf	Dat1,W
+		andlw	B'00001111'
+		movwf	IDbyte			;has ID byte
+		movf	Dat1,W
 		andlw	B'11000000'		;clear unwanted bits
+	
 		iorwf	Dat2,W
 		movwf	Adr1
-		movlw	0xC0			;for NMRA compatibility. Adr1 has hi byte
+		bnz		do_5			;top byte = 0?
+		movlw	.128			;is it a long?
+		subwf	Adr2,W			;is it more than 127?
+		bnn		do_5			;is a long address					
+		bra		do_6
+do_5	movlw	0xC0			;for NMRA compatibility. Adr1 has hi byte
 		iorwf	Adr1
-		bsf		Bflag,1			;for hi byte
+
+do_6	bsf		Bflag,1			;for hi byte
 		clrf	Flags			;done
 		bra		do_4
 do_3	
 		
 		btfss	Datmode,3		;is it running mode?
 		bra		hi_loop
-
+;		movlw	B'00000010'		;Channel of Railcom
+;		movwf	Ch_no
+		swapf	IDbyte,F
 		call	set_DDES		;set output frame and send
-		btfss	Sflag,0			;send once
-		call	sendTXb			;as sendTXa but wait till sent
+			
+do_7;	btfss	Sflag,0			;send once
+	;	call	sendTXb			;as sendTXa but wait till sent
 		clrf	Flags
 
 		bsf		Sflag,0			;set flag for once only
 
+;		btfsc	Nvtemp,2
+;		bra		ch2_1				;do channel 2 as well
+;		bra		hi_loop
 
 hi_loop	
 		btfss	PIR1,TMR1IF
 		bra		hi_loop
 
 		
-		bcf		T1CON,TMR1ON		;stop it
+hi_loop1	bcf		T1CON,TMR1ON		;stop it
 		bcf		PIR1,TMR1IF
 		
 
 	
-		movlw	0xF6				;reset timer for short pulses
+hi_loop2		movlw	0xF6				;reset timer for short pulses
 		movwf	TMR1H
 		clrf	TMR1L
 		bcf		LATC,5				;clear anyway	
@@ -1131,6 +1172,129 @@ hi_loop
 	
 		retfie	1
 
+ch2_1	bcf		Nvtemp,1		;don't do Ch 1 again
+
+
+
+ch2		nop						;as channel 1 but do once
+		clrf	PIR1			;clear flags
+		movlw	0xE5			;time for channel 2 data delay
+		movwf	TMR1H
+		movlw	0x00
+		movwf	TMR1L
+		bsf		T1CON,TMR1ON		;restart for read
+ch2_2	btfss	PIR1,TMR1IF		;loop
+		bra		ch2_2
+		bcf		T1CON,TMR1ON		;stop ot
+		clrf	PIR1			;clear flags
+		movlw	0xBC			;time for channel 2 data
+		movwf	TMR1H
+		movlw	0x00
+		movwf	TMR1L
+		bsf		LATC,5				;flag up  for scope timing test
+		bsf		T1CON,TMR1ON		;restart for read
+		
+		bsf		RCSTA1,CREN			;start EUSART1
+b2_loop btfsc	PIR1,TMR1IF			;time out?
+		bra		end2_loop
+		
+		
+
+b2_loop1	
+		btfss	PIR1,RC1IF			;any serial byte?
+		bra		b2_loop				;wait for now
+		movf	RCREG1,W			;get serial byte to Byte 1
+		movwf	Byte1
+		movlw	1
+		movwf	Flags
+		bcf		PIR1,RC1IF			;clear EUSART flag for next
+b2_loop2	btfsc	PIR1,TMR1IF			;time out?
+		bra		end2_loop
+		btfss	PIR1,RC1IF
+		bra		b2_loop2				;wait for now
+		movf	RCREG1,W
+		movwf	Byte2
+		movlw	2
+		movwf	Flags				;bytes waiting.
+		bcf		PIR1,RC1IF
+
+
+	
+	
+end2_loop btfss	PIR1,TMR1IF			;time out?
+		bra		end2_loop
+
+		bcf		LATC,5				;flag down. End of Channel 2 time
+		bcf		RCSTA1,CREN			;stop EUSART
+	bcf		T1CON,TMR1ON		;stop it 
+		clrf	PIR1
+
+	
+		movlw	2
+		subwf	Flags,W
+		bnz		hi_loop2				;not got bytes
+
+
+
+do2_data	movlw	1
+		movwf	FSR0H			;sort out 4/8 bytes
+		movf	Byte1,W
+		movwf	FSR0L
+		movf	INDF0,W
+		btfsc	WREG,7			;valid 4/8?
+		bra		do2_2			;abort
+		movwf	Dat1			;decoded byte 1
+		movf	Byte2,W
+		movwf	FSR0L
+		movf	INDF0,W
+		btfsc	WREG,7
+		bra		do2_2
+		movwf	Dat2
+	
+	
+		rrncf	Dat1			;move bottom two bits to 7,6 of second byte	
+		rrncf	Dat1
+		movf	Dat1,W
+		andlw	B'00001111'
+		movwf	IDbyte			;has ID byte
+		movf	Dat1,W
+		andlw	B'11000000'		;clear unwanted bits
+		iorwf	Dat2,W
+		movwf	Adr1			;has data byte
+		
+do2_1	
+
+
+	
+		
+		btfss	Datmode,3		;is it running mode?
+		bra		hi_loop2		;no
+		movlw	B'00000100'		;Channel of Railcom
+		swapf	IDbyte,F
+		call	set_DDES		;set output frame and send
+	
+;		movf	IDbyte,W		;same as before?
+;		subwf	ID_old,W
+;		bz		do2_1a
+;		bcf		Sflag,0
+;do2_1a	btfss	Sflag,0			;send once
+	call	sendTXb			;as sendTXa but wait till sent
+		bsf		Sflag,0			;set flag for once only	
+do2_1b		movff	IDbyte,ID_old
+		
+		
+		
+		
+
+
+		
+do2_2	nop
+		clrf	Flags			;done
+		bra		hi_loop2		;back 	
+		
+
+
+
 ;************************************************************
 
 ;**************************************************************
@@ -1139,7 +1303,7 @@ hi_loop
 ;		Busy frame is a max priority, zero data frame, preloaded in TXB0.
 ;		Latency count (number of tries to transmit) is preset in code to .10
 	
-				ORG 0A00h
+				ORG 0B00h
 
 lpint	movwf	W_tempL					;save critical variables
 		movff	STATUS,St_tempL
@@ -1255,7 +1419,7 @@ main2	btfss	PIR4,TMR4IF
 		btg		LATC,3				;timer flag
 		decfsz	T4count
 		bra		main
-		decfsz	NV2					;unocc delay in NV2
+		decfsz	NV2					;unocc  delay in NV2
 		bra		main
 		btfss	Sflag,2				;has sent?
 		call	un_occ				;send unoccupied
@@ -1495,17 +1659,31 @@ lut_loop	incf	EEADR
 
 ;***************************************************************
 
-set_DDES		movlw	OPC_DDES		;set up CBUS frame to send
+set_DDES movf	DNhi,F			;is DN = 0
+		 bnz	set_DDES1
+		movf	DNlo,F
+		bnz		set_DDES1
+		retlw	1						;invalid DN
+	
+set_DDES1	
+		btfsc	Sflag,0
+		return
+		movlw	OPC_DDES		;set up CBUS frame to send
 		movwf	Tx1d0
 		movff	DNhi,Tx1d1			;needs DN here
 		movff	DNlo,Tx1d2
-		movff	Nvtemp,Tx1d3	;use NV for now
+		movff	IDbyte,Tx1d3		;use channel number for now
 		movff	Adr1,Tx1d4		;loco address hi byte
 		movff	Adr2,Tx1d5		;loco address lo byte
 		movff	Loco,Tx1d6
-		clrf	Tx1d7
+		movff	Loco1,Tx1d7
 		movlw	.8
 		movwf	Dlc
+		btfss	Sflag,0
+		call	sendTXb
+		bsf		Sflag,0
+		clrf	Flags
+		
 		return
 
 ;******************************************************************
@@ -1516,7 +1694,9 @@ set_DDES		movlw	OPC_DDES		;set up CBUS frame to send
 
 learn2	;btfss	Mode,1			;FLiM?
 		btfss	Datmode,3
-		return					;
+		return	
+		btfsc	Datmode,5
+		bra		unlearn				;
 		movf	RXB0D6,W		;get which reader
 		decf	WREG			;starts at 0. Needs check here?
 		rlncf	WREG			;two bytes per reader
@@ -1524,9 +1704,11 @@ learn2	;btfss	Mode,1			;FLiM?
 		movlw	LOW DevNo
 		addwf	EEADR
 		movf	RXB0D3,W		;upper byte of DN
+		movwf	DNhi			;save it
 		call	eewrite			;put in
 		incf	EEADR
 		movf	RXB0D4,W		;next byte
+		movwf	DNlo
 		call	eewrite
 		
 
@@ -1540,6 +1722,21 @@ l_out2	bcf		RXB0CON,RXFUL
 
 
 ;**********************************************************************
+
+;		Unlearn an event  (there is only one)
+
+unlearn movlw	LOW DevNo
+		movwf	EEADR
+		movlw	0
+		movwf	DNhi			;save it
+		call	eewrite			;put in
+		incf	EEADR
+		movlw	0		;next byte
+		movwf	DNlo
+		call	eewrite
+		bcf		Datmode,5   ; clear unlearn
+		bra		l_out2		;back
+
 
 ;		Set node to learn mode
 
@@ -1740,7 +1937,7 @@ newid	movlw	LOW CANid		;put new CAN_ID etc in EEPROM
 		movwf	DNhi
 		incf	EEADR
 		call	eeread
-		movwf	LOW DNlo
+		movwf	DNlo
 		movlw	LOW NodeID
 		movwf	EEADR
 		call	eeread
@@ -1766,24 +1963,6 @@ new_1	btfsc	TXB2CON,TXREQ
 		iorwf	TXB2SIDH		;set priority
 		clrf	TXB2DLC			;no data, no RTR
 
-;		put info into TXB0 for occupied frame
-
-		clrf	TXB0SIDH
-		movf	IDtemph,W
-		movwf	TXB0SIDH
-		movf	IDtempl,W
-		movwf	TXB0SIDL
-		movlw	0xB0
-		iorwf	TXB0SIDH		;set priority
-		movlw	5
-		movwf	TXB0DLC	
-		movlw	OPC_ASON
-		movwf	TXB0D0
-		movff	NN_temph,TXB0D1
-		movff	NN_templ,TXB0D2
-		movff	DNhi,TXB0D3
-		movff	DNlo,TXB0D4
-		movlb	0
 
 		return
 
@@ -2641,8 +2820,32 @@ short	clrf	ev0					;here if a short event
 
 occ_snd	btfsc	Sflag,1			;has sent an occupied?
 		bra		no_occ
-occ_sn1	bsf		Sflag,1			;do once
+occ_sn1	movf	DNhi,F			;is DN = 0
+		bnz		occ_sn2
+		movf	DNlo,F
+		bnz		occ_sn2
+		bra		no_occ						;invalid DN
+occ_sn2	bsf		Sflag,1			;do once
 		movlb	.15				;bank 15
+		;		put info into TXB0 for occupied frame
+
+		clrf	TXB0SIDH
+		movf	IDtemph,W
+		movwf	TXB0SIDH
+		movf	IDtempl,W
+		movwf	TXB0SIDL
+		movlw	0xB0
+		iorwf	TXB0SIDH		;set priority
+		movlw	5
+		movwf	TXB0DLC	
+		movlw	OPC_ASON
+		movwf	TXB0D0
+		movff	NN_temph,TXB0D1
+		movff	NN_templ,TXB0D2
+		movff	DNhi,TXB0D3
+		movff	DNlo,TXB0D4
+	
+
 		bcf		TXB0D0,0		;ON event
 tx0test	btfsc	TXB0CON,TXREQ	;test if clear to send
 		bra		tx0test
@@ -2650,6 +2853,7 @@ tx0test	btfsc	TXB0CON,TXREQ	;test if clear to send
 tx0sent btfss	TXB0CON,TXBIF
 		bra		tx0sent			;has it sent
 		bcf		TXB0CON,TXBIF
+	
 		
 		movlb	0				;bank 0
 no_occ	bcf		Sflag,2			;clear unocc flag
@@ -2669,9 +2873,35 @@ no_occ	bcf		Sflag,2			;clear unocc flag
 ;****************************************************************
 ;		Send an unoccupied frame
 
-un_occ 	bcf		PIE1,TMR1IE
+un_occ 	;btfsc	Sflag,1			;has sent an occupied?
+	;	bra		no_occ
+		movf	DNhi,F			;is DN = 0
+		bnz		un_occ1
+		movf	DNlo,F
+		bnz		un_occ1
+		bra		un_occ2
+un_occ1	bcf		PIE1,TMR1IE
 		bsf		Sflag,2			;do once
-un_occ1	movlb	.15				;bank 15
+		movlb	.15				;bank 15
+		;		put info into TXB0 for occupied frame
+
+		clrf	TXB0SIDH
+		movf	IDtemph,W
+		movwf	TXB0SIDH
+		movf	IDtempl,W
+		movwf	TXB0SIDL
+		movlw	0xB0
+		iorwf	TXB0SIDH		;set priority
+		movlw	5
+		movwf	TXB0DLC	
+		movlw	OPC_ASON
+		movwf	TXB0D0
+		movff	NN_temph,TXB0D1
+		movff	NN_templ,TXB0D2
+		movff	DNhi,TXB0D3
+		movff	DNlo,TXB0D4
+	
+
 		bsf		TXB0D0,0		;OFF event
 tx0tes1	btfsc	TXB0CON,TXREQ	;test if clear to send
 		bra		tx0tes1
@@ -2681,7 +2911,7 @@ tx0sen1 btfss	TXB0CON,TXBIF
 		bcf		TXB0CON,TXBIF
 		
 		movlb	0				;bank 0
-		bcf		Sflag,1		;clear occ flag
+un_occ2	bcf		Sflag,1		;clear occ flag
 		bcf		Sflag,0		;allow loco frame when next occupied
 		clrf	Bflag		;for next loco	
 		movf	NV2_tmp,W
@@ -2748,6 +2978,12 @@ set1	btfsc	S_PORT,S_BIT		;look for PB on
 set1a	btfss	S_PORT,S_BIT		;button released?
 		bra		set1a				;loop
 		call	self_en				;do an enumerate
+		bcf		Datmode,1
+		bsf		Datmode,2
+		movlw	Modstat
+		movwf	EEADR
+		movlw	B'00000100'
+		call	eewrite	
 		call	nnreq				;request node number RQNN
 set1b	call	flash				;flash yellow
 		btfsc	S_PORT,S_BIT		;PB again?
@@ -2764,6 +3000,10 @@ set1c	btfss	Datmode,0			;got an answer
 		movlw	OPC_RQNP			;request for parameters
 		subwf	ev_opc,W
 		bz		set1e
+		movlw	OPC_RQMN			;is it a name request?
+		subwf	ev_opc,W
+		bz		set1h				;send name
+
 		movlw	OPC_SNN				;set new NN
 		subwf	ev_opc,W
 		bz		set1f
@@ -2774,6 +3014,9 @@ set1d	bcf		RXB0CON,RXFUL
 set1e	call	parasend			;send parameters to FCU
 		bra		set1d				;wait for SNN
 
+set1h	call 	rqmn				;send name
+		goto	set1d
+
 set1f	call	putNN				;put in new NN. Sets Datmode to 8
 		
 		call	newid				;move all ID to EEPROM etc
@@ -2782,15 +3025,20 @@ set1f	call	putNN				;put in new NN. Sets Datmode to 8
 		call	nnrel				;send NNACK
 		bcf		RXB0CON,RXFUL		;clear CAN 
 		bcf		Datmode,0
+		bsf		Sflag,2
 		retlw	0					;continue setup as if running mode
 abort	bcf		LED_PORT,YELLOW
 		retlw	1					;too short or a bounce
 
 
-set2	nop							;here if in running mode
+set2	movwf	W_temp							;here if in running mode
 		
 		sublw	1
 		bz		set2a 
+		movf	W_temp,W
+		sublw	2
+		bz		set_bak2
+
 		bra		set_off				;is	held so  cancel run mode 
 set2a	
 		call	self_en				;do an enumerate
@@ -2812,18 +3060,21 @@ set2d	bcf		RXB0CON,RXFUL
 
 
 set2f	call	putNN				;put in new NN. Sets Datmode to 8
-		call	newid				;move all ID to EEPROM etc
-		call	unflash				;yellow on 
+;		call	newid				;move all ID to EEPROM etc
+set2g	call	unflash				;yellow on 
 		bcf		Datmode,1			;out of NN waiting
 		bcf		Datmode,2
 		movlw	OPC_NNACK
 		movwf	Tx1d0
 		call	nnrel				;send NNACK
-		retlw	0					;back to main
+		goto	main					;back to main
 
 set_bk1	btfss	S_PORT,S_BIT		;released 
 		bra		set_bk1
-		bra		set2f				;back
+		bra		set2g				;back
+
+set_bak2 goto 	main				;bounce so do nothing 		
+
 		
 		
 
@@ -2875,6 +3126,8 @@ setup2	return
 ;********************************************************************	
 
 setsub		movlb	.15
+
+		bsf		OSCTUNE,PLLEN
 	
 		clrf	ANCON0			;disable A/D
 		clrf	ANCON1
@@ -2966,7 +3219,7 @@ nextram	clrf	POSTINC0
 		clrf	B5CON
 		
 			
-		movlw	CAN_BRGCON1		;set CAN bit rate at 125000 
+		movlw	CANBIT_RATE		;set CAN bit rate at 125000 
 		movwf	BRGCON1
 		movlw	B'10011110'		;set phase 1 etc
 		movwf	BRGCON2
@@ -3061,7 +3314,15 @@ NodeID	de	0x00,0x00			;Node ID
 
 	ORG 0xF00010
 DevNo	de	0x00,0x01		;two byte DN
-NVstart	de	0x01,0x7F		;two NVs, initialised to 0x01 and 7F
+	ORG 0xF00020
+NVstart	de	0x02,0x7F		;two NVs, initialised to 0x06 and 7F
+
+							;NV1 is 0 = do nothing
+							;       2 = Ch 1 only
+							;		4 = Ch 2 only
+							;       6 = Ch 1 and Ch 2 
+
+							;NV2 is unoccupied delay
 
 
 
