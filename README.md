@@ -1,6 +1,7 @@
 # CANRCOM
 
 PIC assembler firmware for Railcom authored by Mike Bolton
+The firmware coding is now being maintained by Michael Smith
 
 # Version 4a Build 101
 
