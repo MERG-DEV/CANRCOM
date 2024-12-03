@@ -16,4 +16,4 @@ Tim Calnun Pratt has designed a CANMIO daughter board, MIORCOM, which implements
  
 Documentation on MERG knowledgebase https://www.merg.org.uk/merg_wiki/doku.php?id=cbus:canrcom
 
-New frontend circuit design making better use of comparators. Circuit also includes voltage converter IC. All this makes the frontend circuit more sensitive to incoming RailCom datagrams copared to the old design.
+New frontend circuit design making better use of comparators. Circuit also includes voltage converter IC. All this makes the frontend circuit more sensitive to incoming RailCom datagrams compared to the old original design.
