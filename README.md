@@ -2,8 +2,6 @@
 
 PIC assembler firmware for RailCom authored by Mike Bolton
 
-The firmware coding is now being maintained by Michael Smith
-
 # Version 4a Build 101
 
 This version as provided by Mike in the test1 ZIP file. There are updates as far as test6, but we have not located that source code yet.
